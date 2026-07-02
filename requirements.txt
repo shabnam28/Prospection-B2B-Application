@@ -1,0 +1,8 @@
+beautifulsoup4
+lxml
+pandas
+python-dotenv
+google-cloud-storage
+google-cloud-bigquery
+db-dtypes
+openpyxl
