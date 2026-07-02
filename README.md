@@ -6,7 +6,7 @@ A serverless pipeline that scrapes French company's siren data from [rubypayeur.
 
 ---
 
-## 📌 Overview
+##  Overview
 
 Given an **IDCC code** (French collective labor agreement identifier), this tool:
 1. Scrapes company data across all **Île-de-France** regions 
@@ -15,7 +15,7 @@ Given an **IDCC code** (French collective labor agreement identifier), this tool
 
 ---
 
-## 🗂️ Project Structure
+##  Project Structure
 
 ```
 ├── Siren Collection/ scrapper.py        # Scraper logic
@@ -56,7 +56,7 @@ gcloud iam service-accounts keys create your-service-account.json \
 ```
 ---
 
-## 🚀 How to Run
+##  How to Run
 
 ### Locally
 ```bash
@@ -65,7 +65,7 @@ define NEW IDCC in scraper = RubyPayeurScraper(idcc="0759") AND def __init__(sel
 complete .env variables and add service account key as json file
 python scrapper.py
 ```
-## 📤 Output
+##  Output
 
 ### Google Cloud Storage
 Files saved under `gs://YourBucketName/YourBucketFolerName/IDCC {idcc}/`:
@@ -87,7 +87,7 @@ Files saved under `gs://YourBucketName/YourBucketFolerName/IDCC {idcc}/`:
 | `processed_date` | DATETIME | `NULL` until processed |
 
 ---
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Tool | Purpose |
 |------|---------|
@@ -102,4 +102,101 @@ Files saved under `gs://YourBucketName/YourBucketFolerName/IDCC {idcc}/`:
 - Running the scraper twice for the same IDCC will create **duplicate rows** in BigQuery
 - `.env` file should **never be committed** to GitHub — add it to `.gitignore`
 
+#  SIREN Enrichment Pipeline
 
+A serverless batch pipeline that reads unprocessed companies from BigQuery, enriches them with company and director data, then finds professional contacts via the FullEnrich API.
+
+
+##  Overview
+
+For each unprocessed SIREN in BigQuery, this pipeline:
+1. Reads a **scheduled batch** of unprocessed companies from BigQuery
+2. Calls the **French Government SIREN API** to get company details with their dirigeants
+3. Sends director data to **FullEnrich API** to find work emails & phones
+4. Saves enriched results back to **BigQuery** and **GCS**
+5. Marks processed records (`processed = 1`)
+
+---
+
+##  Project Structure
+
+```
+├── run.py               # Cloud Function entry point + batch orchestration
+├── main.py              # Cloud Function entry point + batch orchestration
+├── search_siren.py      # French Gov SIREN API calls
+├── full_enrich.py       # FullEnrich API for contact enrichment
+├── database.py          # BigQuery save helper
+├── NAF2025.csv          # NAF activity code reference file
+├── requirements.txt     # Python dependencies
+└── .env                 # Local config (never commit this)
+```
+---
+
+##  Flow Diagram
+
+```
+HTTP Request / Cloud Scheduler
+          │
+          ▼
+  daily_scraper()          ← Cloud Function entry point
+          │
+          ▼
+  read_from_bigquery()
+  → SELECT * WHERE processed = 0 where source_foulder= "IDCC 1678" limit 50
+          ▼
+  For each SIREN in batch:
+  │
+  ├── search_siren.py
+  │   └── get_siren_info_by_api()
+  │       → denomination, address, NAF code,
+  │         effectif,Activité principale (NAF/APE), directors list, etc
+  │
+  ├── NAF2025.csv lookup   → activity label
+  ├── effectif_dict lookup → employee range label
+  │
+  └── full_enrich.py
+      └── start_enrichment()
+          → skip rules (commissaire, small companies)
+          → POST to FullEnrich API
+          → returns enrichment_id per director
+          │
+          ▼
+  update_bigquery_flags()
+  → SET processed = 1, processed_date = NOW()
+          │
+          ├── GCS: processed SIRENs CSV
+          ├── GCS: enriched results CSV
+          └── BigQuery: save_to_bigquery()
+              → only rows WITH valid enrichment_id
+```
+---
+
+## Input
+
+### BigQuery Table (`YourTableName`)
+Records where `processed = 0` are picked up automatically from Siren list:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `siren` | INTEGER | Company identifier |
+| `nom` | STRING | Company name |
+| `ville` | STRING | City |
+| `code_postal` | INTEGER | Postal code |
+| `processed` | INTEGER | `0` = not processed |
+| `source_folder` | STRING | e.g. `IDCC 1486` |
+| `processed_date` | DATETIME | `NULL` until processed |
+
+### HTTP Request
+```json
+POST /hello-http
+Content-Type: application/json
+
+{
+  "project_id": "YourProjectName",
+  "dataset_id": "YourDatasetName",
+  "table_id": "YourTableName",
+  "bucket_name": "YourBucketName",
+  "batch_size": 25 or 50
+}
+```
+---
