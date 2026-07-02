@@ -200,3 +200,176 @@ Content-Type: application/json
 }
 ```
 ---
+## 📤 Output
+
+### 1. BigQuery — `YourEnricheTable` Table
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `siren` | STRING | Company SIREN |
+| `company_name` | STRING | Company name |
+| `denomination` | STRING | Legal denomination |
+| `IDCC` | STRING | Source IDCC folder |
+| `ville` | STRING | City |
+| `code_postal` | INTEGER | Postal code |
+| `adresse` | STRING | Full address |
+| `code_naf` | STRING | NAF/APE code |
+| `effectif_salary` | STRING | e.g. `10 à 19 salariés` |
+| `activity_type` | STRING | NAF label |
+| `clef_NIC` | STRING | Collective agreement key |
+| `company_taille` | STRING | Company size category |
+| `role` | STRING | Director role |
+| `dir_name` | STRING | Director last name |
+| `dir_lname` | STRING | Director first name |
+| `enrichment_id` | STRING | FullEnrich reference ID |
+| `flag` | BOOLEAN | Enrichment flag |
+| `processed_date` | TIMESTAMP | Processing timestamp |
+| `status` | STRING | `success` / `no_dirigeants` |
+
+### 2. Google Cloud Storage
+
+| Path | Content |
+|------|---------|
+| `gs://YourBucketName/Processed SIRENS Folder/siren_{timestamp}.csv` | List of processed SIRENs |
+| `gs://YourBucketName/Enriched results Folder/enriched_{timestamp}.csv` | Full enriched results |
+
+---
+
+## 🧩 Module Details
+
+### `main.py` — Cloud Function Entry Point
+Receives the HTTP request and delegates to `daily_scraper()` in `run.py`:
+
+```python
+@functions_framework.http
+def hello_http(request):
+    return daily_scraper(request)
+```
+
+---
+
+### `run.py` — Batch Orchestration
+Coordinates the full pipeline:
+- Reads unprocessed SIRENs from BigQuery
+- Calls SIREN API + FullEnrich for each record
+- Updates BigQuery flags
+- Saves results to GCS and BigQuery
+
+---
+
+### `search_siren.py` — SIREN API
+Calls the French Government API:
+```
+GET https://recherche-entreprises.api.gouv.fr/search?q={siren}
+```
+
+Returns per company:
+
+| Field | Description |
+|-------|-------------|
+| `Dénomination` | Legal company name |
+| `Adresse postale` | Full address |
+| `Activité principale (NAF/APE)` | NAF code |
+| `Code NAF 2025` | Updated NAF 2025 code |
+| `Effectif salarié` | Employee range code |
+| `Taille de la structure` | Company size |
+| `Convention(s) collective(s)` | IDCC list |
+| `dirigeants` | List of directors with name and role |
+
+---
+
+### `full_enrich.py` — Contact Enrichment
+Calls FullEnrich bulk API:
+```
+POST https://app.fullenrich.com/api/v2/contact/enrich/bulk
+```
+
+**Skip rules** — directors are automatically skipped if:
+- Role starts with `COMMISSAIRE` or `AUTRE`
+- First name or last name is empty
+- Company has 0–2 employees (`effectif` starts with `0`, `1 à 2`, or `Unités`)
+
+Returns `enrichment_id` per director for later email/phone retrieval.
+
+---
+
+### `database.py` — BigQuery Save
+- **Auto-creates** the `YourEnrichedTable` table if it does not exist
+- Uses `WRITE_APPEND` — never overwrites existing data
+- Only saves rows that have a valid `enrichment_id`
+
+---
+
+### `NAF2025.csv` — Activity Reference
+Maps NAF codes to French activity labels:
+```csv
+naf_code,naf_label
+62.02A,Conseil en systèmes et logiciels informatiques
+```
+---
+
+##  How to Run phase 2
+
+### Via Postman (deployed function)
+
+| | |
+|---|---|
+| **Method** | `POST` |
+| **URL** | `https://europe-your-project.cloudfunctions.net/hello-http` |
+| **Header** | `Content-Type: application/json` |
+---
+
+### Via Scheduled Job Run 
+  |**Define to run a function for which source_folder** | SELECT * FROM `{project_id}.{dataset_id}.{table_id}`
+                                                          Where processed = 0  and source_folder = "IDCC 2332" AND CAST(code_postal AS STRING) LIKE                                                             '75%'LIMIT 25
+---
+
+##  Google Cloud Setup Configuration
+
+### Step 1 — Enable APIs
+```bash
+gcloud services enable \
+  cloudfunctions.googleapis.com \
+  storage.googleapis.com \
+  bigquery.googleapis.com
+```
+
+### Step 2 — Create Service Account
+```bash
+# Download key for local dev only
+gcloud iam service-accounts keys create your-service-account.json \
+```
+
+### Step 3 — Deploy Cloud Function
+```bash
+gcloud functions deploy hello-http 
+```
+
+### Step 4 — Schedule Daily Run (optional)
+```bash
+create schedule run Function
+  --schedule="0 8 * * *" \
+  --uri="https://europe-your-project.cloudfunctions.net/hello-http" \
+```
+---
+
+##  Tech Stack
+
+| Tool | Purpose |
+|------|---------|
+| Python | Batch processing |
+| French Gov SIREN API | Company + director data |
+| FullEnrich API | Work email & phone enrichment |
+| Google Cloud Functions | Serverless HTTP trigger |
+| Google Cloud Storage | CSV result storage |
+| Google BigQuery | Input data + enriched output |
+| Cloud Scheduler | Daily automatic trigger |
+---
+
+## Phase 2: Notes
+
+- Default **batch size is 25-50** per run — tune via `batch_size` parameter
+- Only rows with a valid `enrichment_id` are saved to BigQuery
+- Directors from small companies (0–2 employees) are **skipped** automatically
+- Records that fail the SIREN API call are **skipped silently** (logged as warnings)
+- `.env` and `*.json` key files should **never be committed** to GitHub
