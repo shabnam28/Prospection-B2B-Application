@@ -1,12 +1,12 @@
 # Prospection-B2B-Application
 Serverless Google Cloud pipeline that scrapes French companies by IDCC, enriches company data via MCP API, retrieves verified contacts with FullEnrich, and stores results in Google Cloud Storage and BigQuery.
 
-## Pahase 1: RubyPayeur IDCC Scraper
+## 1. Pahase 1: RubyPayeur IDCC Scraper
 A serverless pipeline that scrapes French company's siren data from [rubypayeur.com](https://rubypayeur.com) and stores it in Google Cloud Storage and BigQuery.
 
 ---
 
-##  Overview
+##  1.1 Overview
 
 Given an **IDCC code** (French collective labor agreement identifier), this tool:
 1. Scrapes company data across all **Île-de-France** regions 
@@ -15,7 +15,7 @@ Given an **IDCC code** (French collective labor agreement identifier), this tool
 
 ---
 
-##  Project Structure
+##  1.2 Project Structure
 
 ```
 ├── Siren Collection/ scrapper.py        # Scraper logic
@@ -24,9 +24,9 @@ Given an **IDCC code** (French collective labor agreement identifier), this tool
 └── .env               # Local config (never commit this)
 ```
 
-## ☁️ Google Cloud Setup
+## 1.3 Google Cloud Setup
 
-### 1. Enable APIs
+### 1.3.1 Enable APIs
 ```bash
 gcloud services enable \
   cloudfunctions.googleapis.com \
@@ -34,12 +34,12 @@ gcloud services enable \
   bigquery.googleapis.com
 ```
 
-### 2. Create GCS Bucket
+### 1.3.2. Create GCS Bucket
 ```bash
 gsutil mb -l europe-west1 gs://'YourBucketName'
 ```
 
-### 3. Create BigQuery Dataset and Table
+### 1.3.3. Create BigQuery Dataset and Table
 ```bash
 bq mk --dataset your-project-id:"YourDatasetName"
 
@@ -48,7 +48,7 @@ bq mk --table your-project-id:'YourDatasetName'.YourTableName \
   code_postal:INTEGER,processed:INTEGER,\
   source_folder:STRING,processed_date:DATETIME
 ```
-### 4. Create Service Account
+### 1.3.4. Create Service Account
 ```bash
 # Download key for local dev
 gcloud iam service-accounts keys create your-service-account.json \
@@ -56,25 +56,25 @@ gcloud iam service-accounts keys create your-service-account.json \
 ```
 ---
 
-##  How to Run
+##  1.4 How to Run
 
-### Locally
+### 1.4.1 Locally
 ```bash
 pip install -r requirements.txt
 define NEW IDCC in scraper = RubyPayeurScraper(idcc="0759") AND def __init__(self, idcc: str = "0759"):
 complete .env variables and add service account key as json file
 python scrapper.py
 ```
-##  Output
+##  1.5 Output
 
-### Google Cloud Storage
+### 1.5.1 Google Cloud Storage
 Files saved under `gs://YourBucketName/YourBucketFolerName/IDCC {idcc}/`:
 - `entreprises_rubypayeur_idcc_{idcc}_{region}.csv` — one per region
 - `entreprises_rubypayeur_idcc_{idcc}_ALL_REGIONS.csv` — combined
-### Local Run Output
+### 1.5.2 Local Run Output
 "message": "Total global: {len(entreprises)} entreprises"
 
-### BigQuery Table — `YourDatasetName.YourTableName`
+### 1.5.3 BigQuery Table — `YourDatasetName.YourTableName`
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -87,7 +87,7 @@ Files saved under `gs://YourBucketName/YourBucketFolerName/IDCC {idcc}/`:
 | `processed_date` | DATETIME | `NULL` until processed |
 
 ---
-##  Tech Stack
+##  1.6 Tech Stack
 
 | Tool | Purpose |
 |------|---------|
@@ -97,17 +97,17 @@ Files saved under `gs://YourBucketName/YourBucketFolerName/IDCC {idcc}/`:
 
 ---
 
-##  Notes
+##  1.7 Notes
 
 - Running the scraper twice for the same IDCC will create **duplicate rows** in BigQuery
 - `.env` file should **never be committed** to GitHub — add it to `.gitignore`
 
-#  SIREN Enrichment Pipeline
+# 2. Phase 2: SIREN Enrichment Pipeline
 
 A serverless batch pipeline that reads unprocessed companies from BigQuery, enriches them with company and director data, then finds professional contacts via the FullEnrich API.
 
 
-##  Overview
+##  2.1 Overview
 
 For each unprocessed SIREN in BigQuery, this pipeline:
 1. Reads a **scheduled batch** of unprocessed companies from BigQuery
@@ -118,7 +118,7 @@ For each unprocessed SIREN in BigQuery, this pipeline:
 
 ---
 
-##  Project Structure
+##  2.2 Project Structure
 
 ```
 ├── run.py               # Cloud Function entry point + batch orchestration
@@ -132,7 +132,7 @@ For each unprocessed SIREN in BigQuery, this pipeline:
 ```
 ---
 
-##  Flow Diagram
+##  2.3 Flow Diagram
 
 ```
 HTTP Request / Cloud Scheduler
@@ -171,7 +171,7 @@ HTTP Request / Cloud Scheduler
 ```
 ---
 
-## Input
+## 2.4 Input
 
 ### BigQuery Table (`YourTableName`)
 Records where `processed = 0` are picked up automatically from Siren list:
@@ -186,7 +186,7 @@ Records where `processed = 0` are picked up automatically from Siren list:
 | `source_folder` | STRING | e.g. `IDCC 1486` |
 | `processed_date` | DATETIME | `NULL` until processed |
 
-### HTTP Request
+### 2.4.1 HTTP Request
 ```json
 POST /hello-http
 Content-Type: application/json
@@ -200,9 +200,9 @@ Content-Type: application/json
 }
 ```
 ---
-## 📤 Output
+## 2.5  Output
 
-### 1. BigQuery — `YourEnricheTable` Table
+### 2.5.1 BigQuery — `YourEnricheTable` Table
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -226,7 +226,7 @@ Content-Type: application/json
 | `processed_date` | TIMESTAMP | Processing timestamp |
 | `status` | STRING | `success` / `no_dirigeants` |
 
-### 2. Google Cloud Storage
+### 2.5.2. Google Cloud Storage
 
 | Path | Content |
 |------|---------|
@@ -235,9 +235,9 @@ Content-Type: application/json
 
 ---
 
-## 🧩 Module Details
+## 2.6 Module Details
 
-### `main.py` — Cloud Function Entry Point
+### 2.6.1 `main.py` — Cloud Function Entry Point
 Receives the HTTP request and delegates to `daily_scraper()` in `run.py`:
 
 ```python
@@ -248,7 +248,7 @@ def hello_http(request):
 
 ---
 
-### `run.py` — Batch Orchestration
+### 2.6.2`run.py` — Batch Orchestration
 Coordinates the full pipeline:
 - Reads unprocessed SIRENs from BigQuery
 - Calls SIREN API + FullEnrich for each record
@@ -257,7 +257,7 @@ Coordinates the full pipeline:
 
 ---
 
-### `search_siren.py` — SIREN API
+### 2.6.3 `search_siren.py` — SIREN API
 Calls the French Government API:
 ```
 GET https://recherche-entreprises.api.gouv.fr/search?q={siren}
@@ -278,7 +278,7 @@ Returns per company:
 
 ---
 
-### `full_enrich.py` — Contact Enrichment
+### 2.6.4 `full_enrich.py` — Contact Enrichment
 Calls FullEnrich bulk API:
 ```
 POST https://app.fullenrich.com/api/v2/contact/enrich/bulk
@@ -293,14 +293,14 @@ Returns `enrichment_id` per director for later email/phone retrieval.
 
 ---
 
-### `database.py` — BigQuery Save
+### 2.6.5 `database.py` — BigQuery Save
 - **Auto-creates** the `YourEnrichedTable` table if it does not exist
 - Uses `WRITE_APPEND` — never overwrites existing data
 - Only saves rows that have a valid `enrichment_id`
 
 ---
 
-### `NAF2025.csv` — Activity Reference
+### 2.6.6 `NAF2025.csv` — Activity Reference
 Maps NAF codes to French activity labels:
 ```csv
 naf_code,naf_label
@@ -308,9 +308,9 @@ naf_code,naf_label
 ```
 ---
 
-##  How to Run phase 2
+##  2.7 How to Run phase 2
 
-### Via Postman (deployed function)
+### 2.7.1 Via Postman (deployed function)
 
 | | |
 |---|---|
@@ -319,14 +319,14 @@ naf_code,naf_label
 | **Header** | `Content-Type: application/json` |
 ---
 
-### Via Scheduled Job Run 
+### 2.7.2 Via Scheduled Job Run 
   |**Define to run a function for which source_folder** | SELECT * FROM `{project_id}.{dataset_id}.{table_id}`
                                                           Where processed = 0  and source_folder = "IDCC 2332" AND CAST(code_postal AS STRING) LIKE                                                             '75%'LIMIT 25
 ---
 
-##  Google Cloud Setup Configuration
+##  2.8 Google Cloud Setup Configuration
 
-### Step 1 — Enable APIs
+### 2.8.1 Step 1 — Enable APIs
 ```bash
 gcloud services enable \
   cloudfunctions.googleapis.com \
@@ -334,18 +334,18 @@ gcloud services enable \
   bigquery.googleapis.com
 ```
 
-### Step 2 — Create Service Account
+### 2.8.2 Step 2 — Create Service Account
 ```bash
 # Download key for local dev only
 gcloud iam service-accounts keys create your-service-account.json \
 ```
 
-### Step 3 — Deploy Cloud Function
+### 2.8.3 Step 3 — Deploy Cloud Function
 ```bash
 gcloud functions deploy hello-http 
 ```
 
-### Step 4 — Schedule Daily Run (optional)
+###  2.8.4 Step 4 — Schedule Daily Run (optional)
 ```bash
 create schedule run Function
   --schedule="0 8 * * *" \
@@ -353,7 +353,7 @@ create schedule run Function
 ```
 ---
 
-##  Tech Stack
+##  2.9 Tech Stack
 
 | Tool | Purpose |
 |------|---------|
@@ -366,7 +366,7 @@ create schedule run Function
 | Cloud Scheduler | Daily automatic trigger |
 ---
 
-## Phase 2: Notes
+## 2.10 : Phase  2- Notes
 
 - Default **batch size is 25-50** per run — tune via `batch_size` parameter
 - Only rows with a valid `enrichment_id` are saved to BigQuery
