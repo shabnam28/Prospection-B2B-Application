@@ -373,3 +373,305 @@ create schedule run Function
 - Directors from small companies (0–2 employees) are **skipped** automatically
 - Records that fail the SIREN API call are **skipped silently** (logged as warnings)
 - `.env` and `*.json` key files should **never be committed** to GitHub
+
+# 3 Contact Collection Pipeline
+ 
+A serverless Cloud Function that retrieves enriched contact data (emails, phones)
+and company websites for previously enriched directors, then stores the results in BigQuery.
+ 
+---
+ 
+## 3.1 Overview
+For each enriched director in BigQuery (`flag = false`), this function:
+1. Calls **FullEnrich API** to retrieve emails and phone numbers
+2. Calls **Google Maps Places API** to find the company website
+3. Saves contact results to a new BigQuery table (`OPCO_CONTACTS`)
+4. Updates the `flag = TRUE` on processed records
+
+## 3.2 Project Structure
+ 
+```
+Contact Collection/
+├── main.py              # Cloud Function entry point + full logic
+├── requirements.txt     # Python dependencies
+└── .env                 # Local config (never commit this)
+```
+## 3.3 Configuration
+ 
+### 3.3.1 Environment Variables
+Set these in GCP Cloud Function environment or `.env` for local dev:
+ 
+```env
+GOOGLE_APPLICATION_CREDENTIALS=your-service-account.json
+PROJECT_ID=YOUR_PROJECT_ID
+DATASET_ID=YOUR_DATASET
+TABLE_ENRICH=YOUR_ENRICH_TABLE
+TABLE_CONTACTS=YOUR_CONTACTS_TABLE
+```
+ 
+### 3.3.2 Secret Manager
+The following secrets must be created in **GCP Secret Manager**:
+ 
+| Secret Name | Description |
+|-------------|-------------|
+| `GOOGLE_MAPS_API_KEY` | Google Maps Places API key |
+| `FULL_ENRICH_API_KEY` | FullEnrich API key |
+ 
+---
+
+## 3.4 Flow Diagram
+ 
+```
+HTTP Request
+     │
+     ▼
+hello_http()
+     │
+     ├── init_secrets()
+     │   └── Load GOOGLE_MAPS_API_KEY + FULL_ENRICH_API_KEY
+     │       from GCP Secret Manager
+     │
+     ▼
+process_enrichment()
+     │
+     ▼
+BigQuery: SELECT * FROM YOUR_ENRICH_TABLE
+WHERE flag = false AND IDCC = 'IDCC 1147'
+LIMIT 20
+     │
+     ▼
+For each row:
+     │
+     ├── get_enrichment_data(enrichment_id)
+     │   └── GET FullEnrich API
+     │       → emails, phones, regions
+     │
+     └── get_company_website(company_name)
+         └── GET Google Maps Places API
+             → place_id → website URL
+     │
+     ▼
+INSERT results INTO YOUR_CONTACTS_TABLE (BigQuery)
+     │
+     ▼
+UPDATE YOUR_ENRICH_TABLE
+SET flag = TRUE
+WHERE enrichment_id IN (processed_ids)
+```
+ 
+---
+ 
+## 3.5 Input
+ 
+### 3.5.1 BigQuery Table — `YOUR_ENRICH_TABLE`
+Records where `flag = false` are picked up:
+ 
+| Field | Type | Description |
+|-------|------|-------------|
+| `siren` | STRING | Company SIREN |
+| `company_name` | STRING | Company name |
+| `denomination` | STRING | Legal denomination |
+| `IDCC` | STRING | Source IDCC folder |
+| `ville` | STRING | City |
+| `code_postal` | INTEGER | Postal code |
+| `adresse` | STRING | Full address |
+| `code_naf` | STRING | NAF/APE code |
+| `effectif_salary` | STRING | e.g. `10 à 19 salariés` |
+| `activity_type` | STRING | NAF label |
+| `clef_NIC` | STRING | Collective agreement key |
+| `company_taille` | STRING | Company size category |
+| `role` | STRING | Director role |
+| `dir_name` | STRING | Director last name |
+| `dir_lname` | STRING | Director first name |
+| `enrichment_id` | STRING | FullEnrich reference ID |
+| `flag` | BOOLEAN | Enrichment flag |`0` = not processed by default
+| `processed_date` | TIMESTAMP | Processing timestamp |
+| `status` | STRING | `success` / `no_dirigeants` |
+ 
+### 3.5.2 HTTP Request
+No body required — the function runs automatically on trigger:
+```json
+POST /hello-http
+```
+ 
+Or with optional parameters if extended:
+```json
+{
+  "idcc": "IDCC 1147",
+  "batch_size": 20
+}
+```
+---
+ 
+## 3.6 Output
+
+### 3.6.1 BigQuery Table — `YOUR_CONTACTS_TABLE`
+ 
+| Field | Type | Description |
+|-------|------|-------------|
+| `enrichment_id` | STRING | FullEnrich reference ID |
+| `siren` | STRING | Company SIREN |
+| `processed_date` | TIMESTAMP | Original enrichment date |
+| `emails` | STRING | Comma-separated work emails |
+| `phones` | STRING | Comma-separated phone numbers |
+| `regions` | STRING | Comma-separated phone regions |
+| `website_link` | STRING | Company website URL |
+| `inserted_date` | TIMESTAMP | When this record was inserted |
+ 
+### 3.6.2 BigQuery Flag Update
+```sql
+UPDATE CV.OPCO_ENRICH
+SET flag = TRUE
+WHERE enrichment_id IN (processed_ids)
+```
+---
+## 3.7 Module Details
+ 
+### 3.7.1 `hello_http()` — Entry Point
+- Initializes secrets from GCP Secret Manager
+- Calls `process_enrichment()`
+- Returns success/error response
+  
+### 3.7.2 `init_secrets()` — Secret Loader
+Loads API keys **once per function execution** from GCP Secret Manager:
+- `GOOGLE_MAPS_API_KEY`
+- `FULL_ENRICH_API_KEY`
+  
+### 3.7.3 `get_enrichment_data()` — FullEnrich API
+```
+GET https://app.fullenrich.com/api/v2/contact/enrich/bulk/{enrichment_id}
+```
+Returns:
+- `emails` — most probable work email
+- `phones` — list of phone numbers
+- `regions` — phone number regions
+
+### 3.7.4 `get_company_website()` — Google Maps API
+Two-step call:
+```
+# Step 1 — Find place
+GET https://maps.googleapis.com/maps/api/place/textsearch/json?query={company_name}
+ 
+# Step 2 — Get website
+GET https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=website
+```
+**Stops the job** if API returns `REQUEST_DENIED` or `OVER_QUERY_LIMIT`.
+
+## 3.8 How to Run
+ 
+### 3.8.1 Locally
+```bash
+pip install -r requirements.txt
+python main.py
+```
+ 
+### 3.8.2 Via Postman (deployed function)
+ 
+| | |
+|---|---|
+| **Method** | `POST` |
+| **URL** | `https://europe-west1-your-project.cloudfunctions.net/hello-http` |
+| **Header** | `Content-Type: application/json` |
+| **Body** | *(empty or `{}`)* |
+ 
+---
+
+## 3.9 Google Cloud Setup
+ 
+### 3.9.1 — Enable APIs
+```bash
+gcloud services enable \
+  cloudfunctions.googleapis.com \
+  bigquery.googleapis.com \
+  secretmanager.googleapis.com \
+  places-backend.googleapis.com
+```
+ 
+### Step 3.9.2 — Create Secrets
+```bash
+echo -n "your-google-maps-key" | \
+  gcloud secrets create GOOGLE_MAPS_API_KEY --data-file=-
+ 
+echo -n "your-fullenrich-key" | \
+  gcloud secrets create FULL_ENRICH_API_KEY --data-file=-
+```
+ 
+### Step 3.9.3 — Grant Secret Access to Service Account
+```bash
+gcloud secrets add-iam-policy-binding GOOGLE_MAPS_API_KEY \
+  --member="serviceAccount:your-sa@your-project.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+ 
+gcloud secrets add-iam-policy-binding FULL_ENRICH_API_KEY \
+  --member="serviceAccount:your-sa@your-project.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+ 
+### Step 3.9.4 — Deploy Cloud Function
+```bash
+gcloud functions deploy hello-http \
+  --gen2 \
+  --runtime python311 \
+  --trigger-http \
+  --entry-point hello_http \
+  --region europe-west1 \
+  --timeout 3600 \
+  --memory 512MB \
+  --allow-unauthenticated \
+  --set-env-vars \
+    PROJECT_ID=your-project-id,\
+    DATASET_ID=CV,\
+    TABLE_OPCO_ENRICH=OPCO_ENRICH,\
+    TABLE_OPCO_CONTACTS=OPCO_CONTACTS
+```
+ 
+### Step 3.9.5 — Schedule Daily Run (optional)
+```bash
+gcloud scheduler jobs create http contact-collection \
+  --schedule="0 9 * * *" \
+  --uri="https://europe-west1-your-project.cloudfunctions.net/hello-http" \
+  --time-zone="Europe/Paris"
+```
+ 
+---
+ 
+## 3.10 Requirements
+ 
+```
+functions-framework==3.*
+requests
+pandas
+google-cloud-bigquery
+google-cloud-secret-manager
+db-dtypes
+```
+ 
+---
+ 
+## 3.11 Tech Stack
+ 
+| Tool | Purpose |
+|------|---------|
+| Python | Processing logic |
+| FullEnrich API | Retrieve emails & phones |
+| Google Maps Places API | Find company website |
+| Google Cloud Functions | Serverless HTTP trigger |
+| Google BigQuery | Input + output data store |
+| GCP Secret Manager | Secure API key storage |
+| Cloud Scheduler | Daily automatic trigger |
+ 
+---
+ 
+## 3.12 Notes
+
+- **Batch size is hardcoded to 20** — change `LIMIT 20` in the query to adjust
+- If Google Maps API returns `OVER_QUERY_LIMIT` → the job **stops immediately** to avoid extra charges
+- **IDCC filter is hardcoded** (`IDCC 1147`) in the query — make it dynamic if needed
+- API keys are loaded from **Secret Manager**, never from `.env` in production
+- `.env` and `*.json` files should **never be committed** to GitHub
+```gitignore
+# .gitignore
+.env
+*.json
+__pycache__/
+```
