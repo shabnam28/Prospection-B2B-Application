@@ -1,5 +1,8 @@
 # Prospection-B2B-Application
 Serverless Google Cloud pipeline that scrapes French companies by IDCC, enriches company data via MCP API, retrieves verified contacts with FullEnrich, and stores results in Google Cloud Storage and BigQuery.
+## Architecture
+
+<img src="./assets/OPCO-FLOW-Prospection B2B.drawio.svg" alt="Architecture Diagram" width="700"/>
 
 ## 1. Pahase 1: RubyPayeur IDCC Scraper
 A serverless pipeline that scrapes French company's siren data from [rubypayeur.com](https://rubypayeur.com) and stores it in Google Cloud Storage and BigQuery.
