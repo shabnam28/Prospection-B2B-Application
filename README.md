@@ -222,7 +222,7 @@ Content-Type: application/json
 | `dir_name` | STRING | Director last name |
 | `dir_lname` | STRING | Director first name |
 | `enrichment_id` | STRING | FullEnrich reference ID |
-| `flag` | BOOLEAN | Enrichment flag |
+| `flag` | BOOLEAN | Enrichment flag |`0` = not processed by default
 | `processed_date` | TIMESTAMP | Processing timestamp |
 | `status` | STRING | `success` / `no_dirigeants` |
 
